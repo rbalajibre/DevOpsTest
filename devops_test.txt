@@ -452,6 +452,356 @@ CMD ["/usr/sbin/apache2", "-D", "FOREGROUND"]
 
 *************
 
+yum install docker
+service docker status
+service docker start
+
+useradd dockeradmin 
+passwd dockeradmin
+usermod -aG docker dockeradmin
+
+
+mkdir /opt/docker
+
+vi Dockerfile.txt
+
+#Pull Base Image
+FROM tomcat:8-jre8
+
+#copy War file on to container
+copy ./webapp.war /usr/local/tomcat/webapps
+
+-- chown R dockeradmin:dockeradmin /opt/dcoker
+
+---
+
+vi /etc/ssh/sshd-config
+service sshd restart
+---
+
+source files - webapp/target/*.war
+remove prefix - webapp/target/
+remote direcoty - //opt/docker
+execute cmd :docker stop demo; docker rm -f demo; docker image rm -f demo; cd /opt/docker; dcoker build -t demo 
+
+execute cmd : docker run -d --name demo -p 8090:8080 demo
+
+
+
+******
+
+
+Simple DevOps Project -01
+We know how to use work with each and Git, Jenkins independently. What if you want to collaborate these two? that is where Simple DevOps project helps you. Follow below steps if you are a new guy to DevOps. You love it.
+
+Follow this article in YouTube
+Prerequisites
+EC2 instance with tomcat installation **installation steps video
+Jenkins server **Get Help here
+Part-01 : Adding steps for Integration
+Steps to create Jenkin job
+Login to Jenkins console
+Create Jenkins job, Fill the following details,
+Source Code Management:
+Repository: https://github.com/ValaxyTech/hello-world.git
+Branches to build : */master
+Build:
+Root POM:pom.xml
+Goals and options : clean install package
+Part-02: Adding Deployment Steps
+in this port we are going to install 'deploy to container' plugin. this is need to deploy on tomcat server which we are using.
+
+Install maven plugin without restart
+Manage Jenkins > Jenkins Plugins > available > deploy to container
+To deploy our build artifacts on tomcat server our Jenkins server need access. For this we should setup credentials. This option is available in Jenkins home page
+
+setup credentials
+credentials > jenkins > Global credentials > add credentials
+Username	: deployer
+Password : XXXXXXX
+id : Tomcat_user
+Description: Tomcat user to deploy on tomcat server
+Modify the same job which created in part-01 and add deployment steps.
+
+Post Steps
+Deploy war/ear to container
+WAR/EAR files : **/*.war
+Containers : Tomcat 8.x
+Credentials: Tomcat_user (which created in above step)
+Tomcat URL : http://<PUBLIC_IP>:<PORT_NO>
+Save and run the job now.
+
+Port-03 : Continuous Integration & Continuous Deployment (CI/CD)
+Now job is running fine but to make this as Continuous Integration and Continuous Deployment Tod do that go back and modify job as below.
+
+Build Triggers
+Poll SCM
+schedule */2 * * * *
+Save the job and modify the code in GitHub. Then you could see your job get trigger a build without any manual intervention.
+
+*****************
+
+
+Simple DevOps Project -02
+Follow this on YouTube
+
+Prerequisites:
+Ansible server Get Help Here
+Jenkins Server Get Help Here
+Tocmat Server Get Help Here
+Part-01 Integration Setps
+Install "publish Over SSH"
+
+Manage Jenkins > Manage Plugins > Available > Publish over SSH
+Enable connection between Ansible and Jenkins
+
+Manage Jenkins > Configure System > Publish Over SSH > SSH Servers
+
+SSH Servers:
+Hostname:<ServerIP>
+username: ansadm
+password: *******
+Test the connection "Test Connection"
+
+Part-02 - Execute job to connect
+create a copywarfile.yml on Ansible under /opt/playbooks
+
+# copywarfile.yml
+---
+- hosts: all 
+  become: true
+  tasks: 
+    - name: copy jar/war onto tomcat servers
+        copy:
+          src: /op/playbooks/wabapp/target/webapp.war
+          dest: /opt/apache-tomcat-8.5.32/webapps
+Add tomcat server details to /etc/ansible/hosts (if you are using other hosts file update server info there)
+
+echo "<server_IP>" >> /etc/ansible/hosts
+Create Jenkins job, Fill the following details,
+
+Source Code Management:
+
+Repository: https://github.com/ValaxyTech/hello-world.git
+Branches to build : */master
+Build:
+
+Root POM:pom.xml
+Goals and options : clean install package
+Add post-build steps
+
+Send files or execute commands over SSH
+SSH Server : ansible_server
+Source fiels: webapp/target/*.war
+Remote directory: //opt//playbooks
+Add post-build steps
+
+Send files or execute commands over ssH
+SSH Server : ansible_server
+Exec command ansible-playbook /opt/playbooks/copywarfile.yml
+Execute job and you should be able to seen build has been deployed on Tomcat server.
+
+
+*********************
+
+Simple DevOps Project -3
+Launch an EC2 instance for Docker host
+
+Install docker on EC2 instance and start services
+
+yum install docker
+service docker start
+create a new user for Docker management and add him to Docker (default) group
+useradd dockeradmin
+passwd dockeradmin
+usermod -aG docker dockeradmin
+Write a Docker file under /opt/docker
+mkdir /opt/docker
+
+### vi Dockerfile
+# Pull base image 
+From tomcat:8-jre8 
+
+# Maintainer
+MAINTAINER "valaxytech" 
+
+# copy war file on to container 
+COPY ./webapp.war /usr/local/tomcat/webapps
+Login to Jenkins console and add Docker server to execute commands from Jenkins
+Manage Jenkins --> Configure system --> Publish over SSH --> add Docker server and credentials
+
+Create Jenkins job
+
+A) Source Code Management
+Repository : https://github.com/ValaxyTech/hello-world.git
+Branches to build : */master
+
+B) Build Root POM: pom.xml
+Goals and options : clean install package
+
+C) send files or execute commands over SSH Name: docker_host
+Source files	: webapp/target/*.war Remove prefix	: webapp/target Remote directory	: //opt//docker
+Exec command[s]	:
+
+docker stop valaxy_demo;
+docker rm -f valaxy_demo;
+docker image rm -f valaxy_demo;
+cd /opt/docker;
+docker build -t valaxy_demo .
+D) send files or execute commands over SSH
+Name: docker_host
+Exec command	: docker run -d --name valaxy_demo -p 8090:8080 valaxy_demo
+
+Login to Docker host and check images and containers. (no images and containers)
+
+Execute Jenkins job
+
+check images and containers again on Docker host. This time an image and container get creates through Jenkins job
+
+Access web application from browser which is running on container
+
+<docker_host_Public_IP>:8090
+
+
+**********************
+
+
+Simple DevOps Project - 4
+In this project, we will be see how to use Git, Jenkins, Ansible, DockerHub, Docker to DEPLOY on a docker container.,
+
+Follow this project in Youtube
+
+
+
+PreRequisites
+Jenkins - Get help here
+Ansible - Get help here
+Setup ansible client and install docker. here
+Docker Hub account
+Previous DevOps projects:
+Simple DevOps project-1 here
+Simple DevOps project-2 here
+Simple DevOps project-3 here
+In part-01 we create Docker image on ansible server through Jenkins job and pushed it onto DockerHub.
+
+Part-01 : Create an docker image
+Login to Jenkins console
+
+Create Jenkins job, Fill the following details,
+
+Source Code Management:
+Repository : https://github.com/ValaxyTech/hello-world.git
+Branches to build : */master
+Build:
+Root POM:pom.xml
+Goals and options : clean install package
+Post Steps
+Send files or execute commands over SSH
+
+Name: ansible_server
+Source files	: webapp/target/*.war
+Remove prefix	: webapp/target
+Remote directory	: //opt//docker
+Send files or execute commands over SSH
+
+Name: ansible_server
+Source files	: Dockerfile
+Remote directory	: //opt//docker
+Exec Command:
+cd /opt/docker
+docker build -t valaxy_demo .
+docker tag valaxy_demo valaxy/valaxy_demo
+docker push valaxy/valaxy_demo
+docker rmi valaxy_demo valaxy/valaxy_demo
+Login to Docker host and check images and containers. (no images and containers)
+
+login to docker hub and check. shouldn't find images with for valaxy_demo
+
+Execute Jenkins job
+
+check images in Docker hub. Now you could able to see new images pushed to Valaxy Docker_Hub
+
+Troubleshooting:
+Docker should be installed on ansible server
+Should login to "docker hub" on ansible server
+ansadmin user should be part of docker group
+In Part-02 we create create_docker_container.yml playbook. this get intiated by jenkins job, run by ansible and exected on dokcer_host
+
+Part-02 : Deploy Containers
+Write a yml file to create a container (file name : create_docker_container.yml)
+
+  ---
+  - hosts: web-servers
+    become: true
+    tasks:
+     - name: stop previous version docker
+       shell: docker stop valaxy_demo
+     - name: remove stopped container
+       shell: docker rm -f valaxy_demo	  
+     - name: remove docker images
+       shell: docker image rm -f valaxy/valaxy_demo
+       
+     - name: create docker image
+       shell: docker run -d --name valaxy_demo -p 8090:8080 valaxy/valaxy_demo
+Add this script to Jenkins job.
+
+Chose "configure" to modify your jenkins job.
+Under post build actions
+Send files or execute commands over SSH
+Exec Command:
+   cd /opt/playbooks
+   ansible-playbook create_docker_container.yml
+Execute Jenkins job.
+
+You could see a new container on your docker host. can able access it from browser on port 8090
+
+Troubleshooting: Makesure you have opened required ports on AWS Security group for this server.
+
+In Part-03 we try to improvise to store docker images previous versions
+
+Part-03 : Deploy with Version Control Containers
+So for we used latest docker image to build a container, but what happens if latest version is not working?
+One easiest solution is, maintaining version for each build. This can be achieved by using environment variables.
+
+here we use 2 variables
+
+BUILD_ID - The current build id
+JOB_NAME - Name of the project of this build. This is the name you gave your job when you first set it up.
+for more info Please refer this URL
+
+Lets modify jenkins job which was created in Part-01 as below.
+
+Create Jenkins job
+Source Code Management:
+
+Repository : https://github.com/ValaxyTech/hello-world.git
+Branches to build : */master
+Build:
+
+Root POM:pom.xml
+Goals and options : clean install package
+Send files or execute commands over SSH
+
+Name: ansible_server
+Source files	: webapp/target/*.war
+Remove prefix	: webapp/target
+Remote directory	: //opt//docker
+Send files or execute commands over SSH
+
+Name: ansible_server
+Source files	: Dockerfile
+Remote directory	: //opt//docker
+cd /opt/docker
+docker build -t $JOB_NAME:v1.$BUILD_ID .
+docker tag $JOB_NAME:v1.$BUILD_ID valaxy/$JOB_NAME:v1.$BUILD_ID
+docker tag $JOB_NAME:v1.$BUILD_ID valaxy/$JOB_NAME:latest
+docker push valaxy/$JOB_NAME:v1.$BUILD_ID
+docker push valaxy/$JOB_NAME:latest
+docker rmi $JOB_NAME:v1.$BUILD_ID valaxy/$JOB_NAME:v1.$BUILD_ID
+valaxy/$JOB_NAME:latest
+
+***************
+
 
 
 
