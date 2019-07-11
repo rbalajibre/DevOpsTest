@@ -1,0 +1,244 @@
+node {
+    cleanWs()
+    /*stage ('Publish SNS') {
+        snsPublish(topicArn:'arn:aws:sns:us-east-1:313342457483:JenkinsStatus', subject:'Test SNS', message:'Usage of SNS Success')
+    }*/
+    def mailBody
+    def mvnHome
+    def props
+    def appType
+    def appGroup
+    def appName
+    def version
+    def artifactType
+    def Port
+    def rootApp
+    def environment
+    def mailId
+    def PWD = pwd();
+    def pipeline_status
+    def issue
+    def newIssue
+    def devServer
+    def map_vars
+        
+    echo " ${PWD} is the workspace"
+    echo "${env.BUILD_NUMBER} is the build number"
+    echo "${env.JOB_NAME} is the build number"
+
+    stage('CodePull') { // For Pulling the code
+        try {
+            map_vars =checkout([$class: 'GitSCM', branches: [[name: '*/${Branch}']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'f93b7259-fe1d-4e36-9e6f-86824c906a4c', url: 'ssh://ec2-52-4-47-28.compute-1.amazonaws.com/repos/national/${AppName}.git']]])
+            print map_vars
+            mailBody = "Code successfully pulled from ${Branch} \n"
+            props = readProperties  file:"${PWD}/jenkins.properties"
+            appType = props['AppType']
+            appGroup = props['AppGroup']
+            appName = props['AppName']
+            version = props['Version']
+            artifactType = props['ArtifactType']
+            Port = props['AppPort']
+            rootApp = props['RootApp']
+            environment = props['Environment']
+            devServer = props['DevServer']
+            mailId = props['mailID']
+            fortifyAppName = props['FortifyName']
+            echo " appPort = ${Port}"
+            echo " newInfo = ${appGroup}, ${appName},  ${version}, ${artifactType} , ${mailId} "
+            echo "${map_vars.GIT_COMMIT} is the last commit"
+        }     
+        catch (error) {
+            
+            def props1 = readProperties  file:"/home/ubuntu/config/mail.properties"
+            def mailId1 = props1['mailID']
+            mailBody = "Code Pull failed \n"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, subject: 'Jenkins Build Failure', to: "${mailId1}"
+
+            
+            //create Jira Ticket
+            issue = [fields: [ project: [key: 'CI'],
+            summary: "JIRA Created from Jenkins : Code Pull Failed : Failure",
+            description: "${mailBody}",
+            issuetype: [name: 'Task']]]
+            newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+            echo newIssue.data.key
+            
+            error("Code Pull Failure")
+        }
+    }
+    
+    /* stage ('checkstyle') {
+        sh" mvn checkstyle:checkstyle"
+        checkstyle canComputeNew: false, defaultEncoding: '', failedTotalAll: '0', failedTotalHigh: '0', failedTotalLow: '0', failedTotalNormal: '0', healthy: '5', pattern: '', unHealthy: '2', unstableTotalAll: '0', unstableTotalHigh: '0', unstableTotalLow: '0', unstableTotalNormal: '0'
+
+            
+    }*/
+    
+    echo " appPort = ${Port}"
+    echo " newInfo = ${appGroup}, ${appName},  ${version}, ${artifactType} , ${mailId} "
+    
+    def artifactLocation 
+    if(appType == 'ui'){
+        artifactLocation = "${PWD}/${appName}.${artifactType}"                      
+    } else {
+        artifactLocation = "/var/lib/jenkins/.m2/repository/${appGroup}/${appName}/${version}/${appName}-${version}.${artifactType}"
+    }
+    echo " Artifact Location in M2 Repository is  ${artifactLocation}"
+    
+    
+    stage('Compile') { // for Build purposes -- to be improved
+       try {
+            if (appType == 'ui') {
+                echo "checkpoint1"
+                try {
+                    sh "cd ${PWD}/${appName};  npm install;  ng lint > lint.txt; ng test >karmaTest.txt; ng build;  zip ${appName}.zip dist/* bs-config.json"
+                    echo 'ng lint is done'
+                   
+                    
+                }
+                catch (error) {
+                    echo 'ng lint failed'
+                    pipeline_status = 'Failure'
+                    mailBody = mailBody  + "Code Compilation Failed" + "\n"               
+                    error('Code Quality Failed')
+                }
+            } else {
+                sh "mvn clean install"
+                
+                checkstyle canComputeNew: false, defaultEncoding: '', healthy: '', pattern: '', unHealthy: ''
+            }
+           mailBody = mailBody  + "Code Compilation completed" + "\n"
+       }
+       catch (error) {
+           
+            pipeline_status = 'Failure'
+            mailBody = mailBody  + "Code Compilation Failed" + "\n"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+            subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+            
+             //create Jira Ticket
+            issue = [fields: [ project: [key: 'CI'],
+            summary: "JIRA Created from Jenkins : ${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure",
+            description: "${mailBody}",
+            issuetype: [name: 'Task']]]
+            newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+            echo newIssue.data.key
+        }
+    }
+    if(appType == 'library'){
+        stage('Fortify') {
+            echo 'Starting fortify Scan'
+            sh "sourceanalyzer -b ${PWD}/src '**/*.java'"
+            sh "sourceanalyzer -b ${fortifyAppName} -scan -64 -verbose -Xmx6G -format 'fpr' -f '${PWD}/${appName}.fpr'"
+            //sh "mvn install sca:translate"
+            //sh "mvn -Dfortify.sca.Xmx=800M sca:scan"
+            echo 'End of Fortify Scan'
+        }
+    }
+    
+    if (appType != 'ui') {
+        stage('Code Quality Reports') { // For Code Quality checks -- to be improved        
+            pmd canComputeNew: false, defaultEncoding: '', healthy: '', pattern: '', unHealthy: ''
+            findbugs canComputeNew: false, defaultEncoding: '', excludePattern: '', healthy: '', includePattern: '', pattern: '', unHealthy: ''
+            
+            mailBody = mailBody  + "Published code quality results"  + "\n"
+            if (pipeline_status == 'Failure') {
+                error('Compiling the application failed')   
+                emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+                subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+                
+                //create Jira Ticket
+            issue = [fields: [ project: [key: 'CI'],
+            summary: 'JIRA Created from Jenkins : Jenkins Build Failure',
+            description: "${mailBody}",
+            issuetype: [name: 'Task']]]
+            newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+            echo newIssue.data.key
+            }
+        }
+    } else {
+        if (pipeline_status == 'Failure') {
+            error('Code Quality Check Failed')
+        }
+    }
+    
+    
+    // for publishing the code quality reports -- to be implemented
+    /*stage('Unit Test Reports') { 
+        echo 'publish the reports to SONAR'
+        if (appType != 'ui') {
+            withSonarQubeEnv('sonar') {
+                sh 'mvn clean package sonar:sonar'
+            }
+        }
+    } */
+    stage('Push 2 Artifactory') { //for saving artifacts -- completed
+        try {
+            if (appType == 'ui') {
+                echo 'Push To Artifactory started'
+                def server = Artifactory.server 'Artifactory'
+                def uploadSpec = """{
+                    "files": [
+                        {
+                            "pattern": "${PWD}/${AppName}/${AppName}.${artifactType}",
+                            "target": "ApplicationArtifacts/${rootApp}/${environment}/${appType}/"
+                        }
+                    ]
+                }"""
+                server.upload(uploadSpec)
+                echo 'Push To Artifactory Completed'
+            } else {
+                echo 'Push To Artifactory started'
+                def server = Artifactory.server 'Artifactory'
+                def uploadSpec = """{
+                    "files": [
+                        {
+                            "pattern": "${artifactLocation}",
+                            "target": "ApplicationArtifacts/${rootApp}/${environment}/${appType}/"
+                        }
+                    ]
+                }"""
+                server.upload(uploadSpec)
+                echo 'Push To Artifactory Completed'
+            }
+            mailBody = mailBody  + "Code Pushed to the Artifactory" + "\n" 
+        }
+        catch (error) {
+            mailBody = mailBody  + "Push to Artifactory Failed" + "\n"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+            subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+            
+             //create Jira Ticket
+            issue = [fields: [ project: [key: 'CI'],
+            summary: "JIRA Created from Jenkins : ${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure",
+            description: "${mailBody}",
+            issuetype: [name: 'Task']]]
+            newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+            echo newIssue.data.key
+            
+            error('Error in Saving The Artifact')
+        }
+        fingerprint '**/*.jar'
+    }
+    stage('Notify Build Complete') { //Notification Stage -- Integration with Jira or equivalent pending
+        mailBody = mailBody  + "Notification sent" + "\n"
+        echo "${mailBody}"
+        
+        if (appType == 'library' || appType == 'service'){
+            //publishHTML([allowMissing: false, alwaysLinkToLastBuild: true, keepAll: false, reportDir: 'coverage', reportFiles: 'index.html', reportName: 'HTML Report', reportTitles: ''])
+            sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} '/repos/national/git-properties/updateProperties.sh ${env.BUILD_NUMBER} ${appName} ${map_vars.GIT_COMMIT}'"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+            subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Success", to: "${mailId}"
+            
+        }
+        
+        if (appType != 'library') {
+            //publishHTML([allowMissing: false, alwaysLinkToLastBuild: true, keepAll: false, reportDir: 'coverage', reportFiles: 'index.html', reportName: 'HTML Report', reportTitles: ''])
+            mailBody = mailBody  + "Triggerring Deployment Automation Pipeline" + "\n"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+            subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Success", to: "${mailId}"
+            build job: 'Deployment_Automation', wait: false, parameters: [[$class: 'StringParameterValue', name: 'AppName1', value: "${AppName}"], [$class: 'StringParameterValue', name: 'Branch', value: "${Branch}"]]
+        }
+    }
+    
+}

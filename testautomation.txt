@@ -1,0 +1,86 @@
+node {
+    def mvnHome
+    cleanWs()
+    def PWD = pwd();
+    echo " ${PWD} is the workspace"
+    def jobName = currentBuild.displayName
+    stage('Pull Test Scripts') { // For Pulling the code
+      try {
+        checkout([$class: 'GitSCM', branches: [[name: '*/${Branch}']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'f93b7259-fe1d-4e36-9e6f-86824c906a4c', url: 'ssh://ec2-52-4-47-28.compute-1.amazonaws.com/repos/national/${AppName}-test.git']]])
+      }     
+      catch (error) {
+        sh "echo 'Build of  ${AppName} has failed due to Check out failure ' | mail -s 'Jenkins Build failed at SCM checkout' rishi.thota@gmail.com"  
+        
+         //create Jira Ticket
+        issue = [fields: [ project: [key: 'CI'],
+        summary: "JIRA Created from Jenkins : Test Automation Code Pull Failed : ${env.BUILD_NUMBER} : Failure",
+        description: "${mailBody}",
+        issuetype: [name: 'Task']]]
+        newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+        
+        echo newIssue.data.key
+        
+        error('Code Pull Failure')
+      }
+   }
+   
+   /*stage('Selenium CodePull') { 
+        try {
+         git credentialsId: 'f93b7259-fe1d-4e36-9e6f-86824c906a4c', url: 'ssh://ec2-52-4-47-28.compute-1.amazonaws.com/repos/national/seleniumTest.git'
+        }
+        catch (error) {
+         error("Code Pull Failure")
+        }
+    }*/
+    stage('Selenium Compile') { 
+         wrap([$class: 'Xvfb']) {
+            sh "mkdir ${PWD}/selenium/test-output" 
+            sh "cd selenium; mvn clean test "
+         }
+         zip zipFile: 'selenium-test-output.zip', dir: "${PWD}/selenium/test-output"
+         sh "scp  {PWD}/selenium/selenium-test-output.zip /home/ubuntu/test_results/"
+         sh "rm -r /selenium/selenium-test-output.zip"
+    }
+    echo "End of Selenium Testcase"
+
+    stage('Functional Test') {
+        dir('/home/ubuntu/postman/results') {
+            deleteDir()
+        }
+        sh "/usr/local/bin/newman run /home/ubuntu/postman/TTP.postman_collection.json -e /home/ubuntu/postman/TTP.postman_environment.json --reporters html --reporter-html-export /home/ubuntu/postman/reports/results.html"
+        zip dir: '/home/ubuntu/postman/reports/', glob: '', zipFile: 'functional_newman.zip'
+    }
+    stage('Performance Test') {
+        
+        sh "scp ${PWD}/performance/jmeter/${appName}.jmx /home/ubuntu/jmeter-ttp-script/"
+        echo "$jobName"
+                                dir('/home/ubuntu/jmeter-ttp-script/ttpop') {
+                                                deleteDir()
+                                }
+        sh "/opt/Jmeter/apache-jmeter-3.3/bin/jmeter -n -t /home/ubuntu/jmeter-ttp-script/${appName}.jmx -l /home/ubuntu/jmeter-ttp-script/ttp-log${jobName} -e -o /home/ubuntu/jmeter-ttp-script/ttpop"
+                                zip zipFile: 'performance_jmeter.zip', dir: '/home/ubuntu/jmeter-ttp-script/ttpop'
+    }
+   
+    stage('Notification') {
+        echo "${workspace}" 
+        def props1 = readProperties  file:"/home/ubuntu/config/mail.properties"
+        def mailId1 = props1['mailID']
+        def mailRecipients = "${mailId1}"
+        emailext body: '''${SCRIPT, template="groovy-html.template"}''',
+        mimeType: 'text/html',
+        subject: "${env.JOB_NAME} : ${AppName} :  ${env.BUILD_NUMBER}",
+        to: "${mailRecipients}",
+        replyTo: "${mailRecipients}",
+        attachmentsPattern: '**/*.zip'
+        recipientProviders: [
+            [$class: 'CulpritsRecipientProvider']
+        ]
+        
+        sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-54-211-12-210.compute-1.amazonaws.com 'cd /home/ubuntu/reports; sudo rm -r -f *'";
+        sh "scp -i /home/ubuntu/downloads/NewCommonKey.pem *.zip ubuntu@ec2-54-211-12-210.compute-1.amazonaws.com:/home/ubuntu" 
+        sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-54-211-12-210.compute-1.amazonaws.com 'cd /var/www/html/reports/newman; sudo rm -r -f *; cd /var/www/html/reports/jmeter; sudo rm -r -f *'"
+        sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-54-211-12-210.compute-1.amazonaws.com 'sudo cp functional_newman.zip /var/www/html/reports/newman/; cd /var/www/html/reports/newman; sudo unzip functional_newman.zip'"
+        sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-54-211-12-210.compute-1.amazonaws.com 'sudo cp performance_jmeter.zip /var/www/html/reports/jmeter/; cd /var/www/html/reports/jmeter; sudo unzip performance_jmeter.zip'"
+    }
+    deleteDir() 
+}

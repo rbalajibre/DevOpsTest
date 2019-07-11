@@ -1,0 +1,172 @@
+node {
+    def mvnHome
+    def mailBody
+    def issue
+    def newIssue
+    cleanWs()
+    def PWD = pwd();
+    echo " ${PWD} is the workspace"
+    stage('CodePull') { // For Pulling the code
+      try {
+        checkout([$class: 'GitSCM', branches: [[name: '*/${Branch}']], doGenerateSubmoduleConfigurations: false, extensions: [], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'f93b7259-fe1d-4e36-9e6f-86824c906a4c', url: 'ssh://ec2-52-4-47-28.compute-1.amazonaws.com/repos/national/${AppName1}.git']]])
+        mailBody = "Code Pull Successful" + "\n"
+      }     
+      catch (error) {
+        sh "echo 'Build of  ${AppName} has failed due to Check out failure ' | mail -s 'Jenkins Build failed at SCM checkout' prithvirajsadanandan@gmail.com"  
+        mailBody = "Code Pull failed"
+        emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+        subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+        
+         //create Jira Ticket
+        issue = [fields: [ project: [key: 'CI'],
+        summary: "JIRA Created from Jenkins : ${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure",
+        description: "${mailBody}",
+        issuetype: [name: 'Task']]]
+        newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+        echo newIssue.data.key
+        error('Code Pull Failure')
+      }
+   }
+   
+    def props = readProperties  file:"${PWD}/jenkins.properties"
+    def appType = props['AppType']
+    echo " appType = ${appType}"
+    def branch = "${Branch}"
+    def appGroup = props['AppGroup']
+    def appName = props['AppName']
+    def version = props['Version']
+    def artifactType = props['ArtifactType']
+    def Port = props['AppPort']
+    def devServer = props['DevServer']
+    def rootApp = props['RootApp']
+    def environment = props['Environment']
+    def mailId = props['mailID']
+    echo " appPort = ${Port}"
+    echo " newInfo = ${appGroup}, ${appName},  ${version}, ${artifactType}  "
+    stage('Pull Artifact 4 Deployment') { //Pulling Artifacts for Deployment -- Completed
+        echo "Folder to be deleted is /var/lib/jenkins/artifactdownloads/${rootApp}/${environment}/${appType}"
+        dir("/var/lib/jenkins/artifactdownloads/${rootApp}/${environment}/${appType}") {
+            deleteDir()
+        }
+        if (appType == 'ui') {
+            sh "mkdir -p /var/lib/jenkins/artifactdownloads"
+            sh "mkdir -p /var/lib/jenkins/artifactdownloads/UI_deploy"  
+            sh "chmod -R 777 /var/lib/jenkins/artifactdownloads"
+            echo 'Push from Artifactory started'
+            def server = Artifactory.server 'Artifactory'
+            def downloadSpec = """{
+                "files": [
+                    {
+                        "pattern": "ApplicationArtifacts/${rootApp}/${environment}/${appType}/${appName}.${artifactType}",
+                        "target": "/var/lib/jenkins/artifactdownloads/"
+                    }
+                ]
+            }"""
+            server.download(downloadSpec)
+            sh "chmod -R 777 /var/lib/jenkins/artifactdownloads"
+            echo 'Jenkins got the file back'
+            echo "Pushed file to SCM Instance"
+        } else {
+            try {
+                sh "mkdir -p /var/lib/jenkins/artifactdownloads"
+                sh "mkdir -p /var/lib/jenkins/artifactdownloads/${appName}"  
+                sh "chmod -R 777 /var/lib/jenkins/artifactdownloads"
+                echo 'Pull from Artifactory started'
+                def server = Artifactory.server 'Artifactory'
+                def downloadSpec = """{
+                    "files": [
+                        {
+                            "pattern": "ApplicationArtifacts/${rootApp}/${environment}/${appType}/${appName}-${version}.${artifactType}",
+                            "target": "/var/lib/jenkins/artifactdownloads/"
+                        }
+                    ]
+                }"""
+                server.download(downloadSpec)
+                sh "chmod -R 777 /var/lib/jenkins/artifactdownloads"
+                echo 'Jenkins got the file back'
+                sh "scp -i /home/ubuntu/downloads/NewCommonKey.pem /var/lib/jenkins/artifactdownloads/${rootApp}/${environment}/${appType}/${appName}-${version}.${artifactType}  ubuntu@${devServer}:/home/ubuntu/deploy/"
+				sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'sudo rm -r -f /home/ubuntu/deploy/deploy-${appName}.sh'"
+				sh "scp -i /home/ubuntu/downloads/NewCommonKey.pem ${PWD}/deployScripts/deploy-${appType}.sh  ubuntu@${devServer}:/home/ubuntu/deploy/"
+				sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'sudo chmod -R 777 /home/ubuntu/deploy/deploy-${appType}.sh'"
+                echo "Pushed file to SCM Instance"
+            }
+            catch (error) {
+                sh "echo 'Deploy of  ${AppName} has failed due to Pulling Deployable Artifact ' | mail -s 'Jenkins Deploy failed ' prithvirajsadanandan@gmail.com"  
+                emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+                subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+                
+                //create Jira Ticket
+                issue = [fields: [ project: [key: 'CI'],
+                summary: "JIRA Created from Jenkins : ${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure",
+                description: "${mailBody}",
+                issuetype: [name: 'Task']]]
+                newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+                echo newIssue.data.key
+            
+                error('Error in Retrieving the Artifact')
+            }
+        }
+        fingerprint '**/*.jar'
+        mailBody = mailBody + "Retrieve deployable from Artifact Successful" + "\n"
+    }
+    stage('Publish Build') { // Deploying build -- to be improved
+        sleep 5
+        try {
+            //sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'fuser -n tcp -k ${Port}'"
+            echo 'Existing Process Killed'
+        }
+        catch (error) {
+            echo 'No existing process running on the port'
+        }
+        try {
+            if (appType == 'ui') {
+
+                echo 'Unzipping'
+                sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'cd /home/ubuntu;  mkdir -p UI_deploy; sudo chmod -R 777 *'"
+                sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com 'cd /home/ubuntu/UI_deploy/; sudo rm -f -r *'";
+                sh "scp -i /home/ubuntu/downloads/NewCommonKey.pem /var/lib/jenkins/artifactdownloads/${rootApp}/${environment}/${appType}/${appName}.${artifactType} ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com:/home/ubuntu/UI_deploy/"
+                sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com 'cd /home/ubuntu/UI_deploy/; sudo mkdir -p ${appName}; sudo chmod -R 777 *;cd ${appName}; sudo rm -f -r *'"
+                sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com 'unzip /home/ubuntu/UI_deploy/${appName}.${artifactType} -d /home/ubuntu/UI_deploy/${appName}'"
+                echo 'Unzipping'
+               try {
+                	sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com 'fuser -n tcp -k 9443'"
+                	echo 'Existing Process Killed'
+                }
+                catch (error) {
+                    echo 'No existing process running on the port'
+                }
+               sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@ec2-52-91-212-23.compute-1.amazonaws.com 'cd /home/ubuntu/UI_deploy/tdr-ui/;  lite-server &'"
+            } else  {
+                echo 'Trying to deploy code on Dev Environment'
+                echo 'SSH suucessful'
+                //sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'nohup /opt/java/jdk1.8.0_151/bin/java -jar /home/ubuntu/deploy/${AppName}-${version}.${artifactType}  > /dev/null 2>&1 &'"
+				sh "ssh -i /home/ubuntu/downloads/NewCommonKey.pem ubuntu@${devServer} 'cd deploy; ./deploy-${appType}.sh ${Port} ${appName}-${version}.${artifactType} > /dev/null 2>&1 &'"
+				
+            }
+            mailBody = mailBody + "Deploying application initiated" + "\n"
+        }
+        catch (error) {
+            mailBody = mailBody + "Deploying application Failed" + "\n"
+            emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+            subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure", to: "${mailId}"
+            
+            //create Jira Ticket
+            issue = [fields: [ project: [key: 'CI'],
+            summary: "JIRA Created from Jenkins : ${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Failure",
+            description: "${mailBody}",
+            issuetype: [name: 'Task']]]
+            newIssue = jiraNewIssue issue: issue, site: 'Jira_AAA'
+            echo newIssue.data.key
+            
+            error('Error in Retrieving the Artifact')
+        }
+    }
+    //Publish and Trigger TestPipeline
+    stage('Publish Notification') {  // Notification stage
+        mailBody = mailBody + "Deploying application completed" + "\n"
+        mailBody = mailBody + "Triggering Test Automation Pipeline" + "\n"
+        emailext attachLog: true, body: "${mailBody}", compressLog: true, 
+        subject: "${env.JOB_NAME} : ${appName} : ${environment} : ${env.BUILD_NUMBER} : Success", to: "${mailId}"
+        build job: 'Test_Automation',  wait: false, parameters: [[$class: 'StringParameterValue', name: 'AppName', value: "${AppName1}"], [$class: 'StringParameterValue', name: 'Branch', value: "${branch}"]]
+    }
+}
